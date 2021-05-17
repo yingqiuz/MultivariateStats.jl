@@ -5,6 +5,7 @@
 struct ICA{T<:Real}
     mean::Vector{T}   # mean vector, of length m (or empty to indicate zero mean)
     W::Matrix{T}      # component coefficient matrix, of size (m, k)
+    DW::Matrix{T}     # mixing matrix
 end
 
 indim(M::ICA) = size(M.W, 1)
@@ -35,16 +36,20 @@ evaluate(f::Tanh{T}, x::T) where T<:Real = (a = f.a; t = tanh(a * x); (t, a * (1
 struct Gaus{T} <: ICAGDeriv{T} end
 evaluate(f::Gaus{T}, x::T) where T<:Real = (x2 = x * x; e = exp(-x2/2); (x * e, (1 - x2) * e))
 
+struct Cube{T} <: ICAGDeriv{T} end
+evaluate(f::Cube{T}, x::T) where T<:Real = ((x^3, 3 * x * x))
 ## a function to get a g-fun
 
-icagfun(fname::Symbol, ::Type{T} = Float64) where T<:Real=
+icagfun(fname::Symbol, ::Type{T}=Float64) where T<:Real=
     fname == :tanh ? Tanh{T}(1.0) :
     fname == :gaus ? Gaus{T}() :
+    fname == :cube ? Cube{T}() :
     error("Unknown gfun $(fname)")
 
 icagfun(fname::Symbol, a::T) where T<:Real =
     fname == :tanh ? Tanh(a) :
     fname == :gaus ? error("The gfun $(fname) has no parameters") :
+    fname == :cube ? error("The gfun $(fname) has no parameters") :
     error("Unknown gfun $(fname)")
 
 # Fast ICA
@@ -156,12 +161,14 @@ function fit(::Type{ICA}, X::AbstractMatrix{T},                # sample matrix, 
     Z::Matrix{T} = centralize(X, mv)
 
     W0= zeros(T, 0, 0)  # whitening matrix
+    DW = zeros(T, 0, 0)
     if do_whiten
         C = rmul!(Z * transpose(Z), 1.0 / (n - 1))
         Efac = eigen(C)
         ord = sortperm(Efac.values; rev=true)
         (v, P) = extract_kv(Efac, ord, k)
-        W0 = rmul!(P, Diagonal(1 ./ sqrt.(v)))
+        W0 = P * Diagonal(1 ./ sqrt.(v)))
+        DW = P * Diagonal(sqrt.(v)))
         Z = W0'Z
     end
 
@@ -172,8 +179,11 @@ function fit(::Type{ICA}, X::AbstractMatrix{T},                # sample matrix, 
     fastica!(W, Z, fun, maxiter, tol)
 
     # construct model
+    # mixing matrix
+    A = Matrix{T}(undef, m, k)
+    mul!(A, DW, W)
     if do_whiten
         W = W0 * W
     end
-    return ICA(mv, W)
+    return ICA(mv, W, A)
 end
